@@ -1,0 +1,5 @@
+#include "../../../../src/model_loader.h"
+#include "../../../../src/model_manager.h"
+#include "../../../../src/model_io/gguf_io.h"
+#include "../../../../src/model_io/safetensors_io.h"
+#include "../../../../src/model_io/tensor_storage.h"
