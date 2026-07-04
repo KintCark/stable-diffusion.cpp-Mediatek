@@ -1,28 +1,49 @@
-# JNI glue for ModelManager and ModelLoader
-
-// This file implements JNI wrappers that call into the upstream ModelManager and ModelLoader
-// code. It is a bridge between the Android Kotlin code and the native C++ library.
+# JNI bridge and minimal model integration
 
 #include <jni.h>
 #include <string>
 #include <vector>
 #include <mutex>
-#include <nlohmann/json.hpp>
+#include <dirent.h>
+#include <sys/stat.h>
 
 #include "model_manager.h"
-#include "model_loader.h"
-
-using json = nlohmann::json;
 
 static std::unique_ptr<ModelManager> g_manager;
 static std::mutex g_manager_mutex;
+
+static inline bool has_extension(const std::string &s, const std::string &ext) {
+    if (s.size() < ext.size()) return false;
+    auto a = s.substr(s.size()-ext.size());
+    for (size_t i=0;i<ext.size();++i) a[i] = tolower(a[i]);
+    std::string lowext = ext;
+    for (char &c: lowext) c = tolower(c);
+    return a == lowext;
+}
+
+static std::string json_array_from_vector(const std::vector<std::string>& items) {
+    std::string out = "[";
+    for (size_t i = 0; i < items.size(); ++i) {
+        out += '"';
+        for (char c: items[i]) {
+            if (c == '\\') out += "\\\\";
+            else if (c == '"') out += "\\\"";
+            else out += c;
+        }
+        out += '"';
+        if (i + 1 < items.size()) out += ',';
+    }
+    out += "]";
+    return out;
+}
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_kintcark_sdmediatek_NativeBridge_initNative(JNIEnv* env, jobject /* this */) {
     std::lock_guard<std::mutex> lock(g_manager_mutex);
     if (!g_manager) {
         g_manager = std::make_unique<ModelManager>();
-        g_manager->set_n_threads(std::max(1, (int)std::thread::hardware_concurrency() - 1));
+        int cores = (int)std::thread::hardware_concurrency();
+        g_manager->set_n_threads(std::max(1, cores > 1 ? cores - 1 : 1));
     }
     return JNI_TRUE;
 }
@@ -30,12 +51,29 @@ Java_com_kintcark_sdmediatek_NativeBridge_initNative(JNIEnv* env, jobject /* thi
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_kintcark_sdmediatek_NativeBridge_discoverModels(JNIEnv* env, jobject /* this */, jstring jpath) {
     const char* path = env->GetStringUTFChars(jpath, 0);
-    // scan directory (simple implementation)
     std::vector<std::string> found;
-    // ... scanning omitted for brevity, use existing stub implementation
+
+    DIR *dir = opendir(path);
+    if (dir) {
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL) {
+            std::string name = ent->d_name;
+            if (name == "." || name == "..") continue;
+            std::string full = std::string(path) + "/" + name;
+            struct stat st;
+            if (stat(full.c_str(), &st) == 0) {
+                if (S_ISREG(st.st_mode)) {
+                    if (has_extension(name, ".gguf") || has_extension(name, ".safetensors") || has_extension(name, ".ckpt")) {
+                        found.push_back(full);
+                    }
+                }
+            }
+        }
+        closedir(dir);
+    }
+
     env->ReleaseStringUTFChars(jpath, path);
-    json j = found;
-    std::string s = j.dump();
+    std::string s = json_array_from_vector(found);
     return env->NewStringUTF(s.c_str());
 }
 
@@ -51,7 +89,6 @@ Java_com_kintcark_sdmediatek_NativeBridge_loadModel(JNIEnv* env, jobject /* this
         return JNI_FALSE;
     }
 
-    // Use ModelLoader to init_from_file
     bool ok = g_manager->loader().init_from_file_and_convert_name(std::string(modelPath), "", VERSION_COUNT);
 
     env->ReleaseStringUTFChars(jmodelPath, modelPath);
@@ -63,7 +100,6 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_kintcark_sdmediatek_NativeBridge_unloadModel(JNIEnv* env, jobject /* this */) {
     std::lock_guard<std::mutex> lock(g_manager_mutex);
     if (!g_manager) return JNI_FALSE;
-    // ModelManager release_all or destructor
     g_manager.reset();
     return JNI_TRUE;
 }
@@ -71,11 +107,8 @@ Java_com_kintcark_sdmediatek_NativeBridge_unloadModel(JNIEnv* env, jobject /* th
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_kintcark_sdmediatek_NativeBridge_generateImage(JNIEnv* env, jobject /* this */, jstring jparamsJson) {
     const char* params = env->GetStringUTFChars(jparamsJson, 0);
-    // TODO: parse params and run the generation pipeline via ModelManager
-    json out;
-    out["status"] = "ok";
-    out["image_path"] = "/storage/emulated/0/Download/sd_output.png";
-    std::string s = out.dump();
+    // Minimal placeholder generation response; real pipeline invocation will be implemented next.
+    std::string out = "{\"status\":\"ok\",\"image_path\":\"/storage/emulated/0/Download/sd_output.png\"}";
     env->ReleaseStringUTFChars(jparamsJson, params);
-    return env->NewStringUTF(s.c_str());
+    return env->NewStringUTF(out.c_str());
 }
