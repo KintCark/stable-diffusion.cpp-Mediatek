@@ -29,7 +29,7 @@ jobs:
             ~/.gradle/wrapper
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/gradle/wrapper/gradle-wrapper.properties') }}
 
-      - name: Install Android SDK command-line tools
+      - name: Install Android SDK command-line tools and NDK r25b
         run: |
           sudo apt-get update
           sudo apt-get install -y wget unzip tar
@@ -41,6 +41,9 @@ jobs:
           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses
           sdkmanager --sdk_root="$ANDROID_SDK_ROOT" "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+          # Install Android NDK r25b
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" "ndk;25.2.9519653"
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/25.2.9519653" >> $GITHUB_ENV
 
       - name: Ensure gradlew is executable
         run: |
