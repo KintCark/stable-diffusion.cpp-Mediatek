@@ -6,6 +6,9 @@
 #include <mutex>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <cstdio>
+#include <ctime>
+#include <thread>
 
 #include "model_manager.h"
 
@@ -35,6 +38,20 @@ static std::string json_array_from_vector(const std::vector<std::string>& items)
     }
     out += "]";
     return out;
+}
+
+// Simple helper to write the incoming JSON params to a local file (queued request).
+// This keeps the app offline and allows later processing by a background service.
+static std::string write_request_to_downloads(const char* paramsJson) {
+    time_t t = time(nullptr);
+    char fname[256];
+    snprintf(fname, sizeof(fname), "/storage/emulated/0/Download/sd_request_%lld.json", (long long)t);
+    FILE* f = fopen(fname, "wb");
+    if (!f) return std::string();
+    size_t len = strlen(paramsJson);
+    fwrite(paramsJson, 1, len, f);
+    fclose(f);
+    return std::string(fname);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -107,8 +124,31 @@ Java_com_kintcark_sdmediatek_NativeBridge_unloadModel(JNIEnv* env, jobject /* th
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_kintcark_sdmediatek_NativeBridge_generateImage(JNIEnv* env, jobject /* this */, jstring jparamsJson) {
     const char* params = env->GetStringUTFChars(jparamsJson, 0);
-    // Minimal placeholder generation response; real pipeline invocation will be implemented next.
-    std::string out = "{\"status\":\"ok\",\"image_path\":\"/storage/emulated/0/Download/sd_output.png\"}";
+
+    // Quick validation: ensure native manager is initialized
+    {
+        std::lock_guard<std::mutex> lock(g_manager_mutex);
+        if (!g_manager) {
+            std::string err = "{\"status\":\"error\",\"message\":\"native not initialized\"}";
+            env->ReleaseStringUTFChars(jparamsJson, params);
+            return env->NewStringUTF(err.c_str());
+        }
+    }
+
+    // Instead of implementing the full on-device generation in one risky commit,
+    // write the requested params to a file in Downloads so a background worker
+    // (or a future native implementation) can pick it up and run generation locally.
+    std::string request_path = write_request_to_downloads(params);
+    if (request_path.empty()) {
+        std::string err = "{\"status\":\"error\",\"message\":\"failed to write request file\"}";
+        env->ReleaseStringUTFChars(jparamsJson, params);
+        return env->NewStringUTF(err.c_str());
+    }
+
+    // Return queued response with the path to the saved request JSON.
+    char outbuf[512];
+    snprintf(outbuf, sizeof(outbuf), "{\"status\":\"queued\",\"request_path\":\"%s\"}", request_path.c_str());
+
     env->ReleaseStringUTFChars(jparamsJson, params);
-    return env->NewStringUTF(out.c_str());
+    return env->NewStringUTF(outbuf);
 }
