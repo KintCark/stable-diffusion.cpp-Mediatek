@@ -1,0 +1,4 @@
+Manual trigger for CI build
+
+This file was updated to trigger the CI workflow to build the debug APK.
+Timestamp: 2026-07-05T00:00:00Z
